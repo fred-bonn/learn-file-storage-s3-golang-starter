@@ -72,7 +72,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 
 	video, err := cfg.db.GetVideo(videoID)
 	if err != nil {
-		respondWithError(w, http.StatusUnauthorized, "Couldn't find video metadata", err)
+		respondWithError(w, http.StatusInternalServerError, "Couldn't find video metadata", err)
 		return
 	}
 
