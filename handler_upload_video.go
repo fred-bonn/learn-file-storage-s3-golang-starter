@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime"
 	"net/http"
 	"os"
+	"os/exec"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -84,7 +87,22 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	key := getAssetPath(mediaType)
+	aspectRatio, err := getVideoAspectRatio(tempFile.Name())
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't get video aspect ratio", err)
+		return
+	}
+	var aspectRatioPrefix string
+	switch aspectRatio {
+	case "16/9":
+		aspectRatioPrefix = "landscape"
+	case "9/16":
+		aspectRatioPrefix = "portrait"
+	default:
+		aspectRatioPrefix = "other"
+	}
+
+	key := aspectRatioPrefix + "/" + getAssetPath(mediaType)
 	_, err = cfg.s3Client.PutObject(r.Context(), &s3.PutObjectInput{
 		Bucket:      aws.String(cfg.s3Bucket),
 		Key:         &key,
@@ -105,4 +123,46 @@ func (cfg *apiConfig) handlerUploadVideo(w http.ResponseWriter, r *http.Request)
 	}
 
 	respondWithJSON(w, http.StatusOK, video)
+}
+
+func getVideoAspectRatio(filePath string) (string, error) {
+	type ffprobeOutput struct {
+		Streams []struct {
+			Width  int `json:"width"`
+			Height int `json:"height"`
+		} `json:"streams"`
+	}
+
+	cmd := exec.Command("ffprobe", "-v", "error", "-print_format", "json", "-show_streams", filePath)
+	var b bytes.Buffer
+	cmd.Stdout = &b
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("error running ffprobe: %v", err)
+	}
+
+	var output ffprobeOutput
+	if err := json.Unmarshal(b.Bytes(), &output); err != nil {
+		return "", fmt.Errorf("error unmarshalling ffprobe output: %v", err)
+	}
+
+	if len(output.Streams) == 0 {
+		return "", fmt.Errorf("no streams found in ffprobe output")
+	}
+
+	width := output.Streams[0].Width
+	height := output.Streams[0].Height
+	if width == 0 || height == 0 {
+		return "", fmt.Errorf("invalid stream dimensions")
+	}
+
+	var res string
+	if width == 16*height/9 {
+		res = "16/9"
+	} else if height == 16*width/9 {
+		res = "9/16"
+	} else {
+		res = "other"
+	}
+
+	return res, nil
 }
